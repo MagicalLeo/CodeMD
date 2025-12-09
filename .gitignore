@@ -1,0 +1,51 @@
+
+# Build outputs
+/build/
+
+# Flutter / Dart tool directories
+/.dart_tool/
+/.packages
+/.flutter-plugins
+/.flutter-plugins-dependencies
+/.metadata
+
+# IDE / editor
+/.idea/
+/.vscode/
+/*.iml
+
+# FVM
+/.fvm/
+.fvmrc
+
+# Platform specific
+/android/.gradle/
+/android/app/build/
+/ios/Pods/
+/ios/.symlinks/
+/ios/Flutter/Flutter.framework
+/ios/Flutter/Flutter.podspec
+/ios/Flutter/Generated.xcconfig
+/ios/Flutter/ephemeral/
+/macos/Flutter/ephemeral/
+/linux/flutter/ephemeral/
+/windows/flutter/ephemeral/
+
+# Web / compiled assets
+/web/.dart_tool/
+
+# Generated files
+pubspec.lock
+*.log
+*.tmp
+*.swp
+*.bak
+*_widget_test.dart
+_tmp.dart
+_tmp_input.md
+_tmp_widget_test.dart
+
+# Local data
+/.claude/
+/.fvm/
+.DS_Store

@@ -1,0 +1,43 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    html, body { margin:0; padding:0; overflow:hidden; background: transparent; }
+    #container { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+  </style>
+  <script src="mermaid.min.js"></script>
+  <script>
+    const pending = [];
+    let ready = false;
+    function init() {
+      if (ready) return;
+      ready = true;
+      mermaid.initialize({ startOnLoad: false, theme: 'default' });
+      pending.forEach(msg => handleMessage(msg));
+    }
+    function handleMessage(msg) {
+      if (!ready) { pending.push(msg); return; }
+      const { code, theme, requestId } = msg;
+      try {
+        mermaid.initialize({ startOnLoad: false, theme: theme || 'default' });
+        mermaid.render(`id${Date.now()}`, code, (svgCode) => {
+          const base64 = btoa(unescape(encodeURIComponent(svgCode)));
+          window.parent.postMessage({ type:'renderSuccess', requestId, svg: base64 }, '*');
+        });
+      } catch (e) {
+        window.parent.postMessage({ type:'renderError', requestId, error: e.message }, '*');
+      }
+    }
+    window.addEventListener('message', (event) => {
+      if (event.data && event.data.type === 'render') {
+        handleMessage(event.data);
+      }
+    });
+    window.onload = init;
+  </script>
+</head>
+<body>
+  <div id="container"></div>
+</body>
+</html>
