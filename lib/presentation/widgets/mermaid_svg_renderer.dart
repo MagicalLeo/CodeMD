@@ -1,12 +1,12 @@
-import 'package:flutter/material.dart';
-import 'package:flutter_svg/flutter_svg.dart';
 import 'dart:async';
 import 'dart:typed_data';
-import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:visibility_detector/visibility_detector.dart';
 import '../../core/repositories/mermaid_repository.dart';
 
-class MermaidSvgRenderer extends StatefulWidget {
+class MermaidSvgRenderer extends ConsumerStatefulWidget {
   final String mermaidCode;
   final double? width;
   final double? height;
@@ -19,16 +19,15 @@ class MermaidSvgRenderer extends StatefulWidget {
   });
 
   @override
-  State<MermaidSvgRenderer> createState() => _MermaidSvgRendererState();
+  ConsumerState<MermaidSvgRenderer> createState() => _MermaidSvgRendererState();
 }
 
-class _MermaidSvgRendererState extends State<MermaidSvgRenderer> {
-  static final Map<String, String> _svgMemoryCache = {};
+class _MermaidSvgRendererState extends ConsumerState<MermaidSvgRenderer> {
   String? _svgData;
   Uint8List? _pngData;
   bool _isLoading = true;
   String? _error;
-  
+
   final MermaidRepository _repository = MermaidRepositoryImpl();
   bool _didInitDependencies = false;
   bool _isVisible = false;
@@ -36,58 +35,21 @@ class _MermaidSvgRendererState extends State<MermaidSvgRenderer> {
   Timer? _debounceTimer;
   DateTime? _renderStart;
 
-  ScrollHoldController? _scrollHold;
-  int _pointerCount = 0;
-
-  void _onScaleStart(ScaleStartDetails details) {
-    // Lock scroll more aggressively for better zoom UX
-    if (details.pointerCount > 1) {
-      _scrollHold ??= Scrollable.of(context)?.position.hold(() {});
-    }
-  }
-
-  void _onScaleUpdate(ScaleUpdateDetails details) {
-    // More sensitive detection: smaller scale threshold and faster lock
-    if (details.pointerCount > 1 || (details.scale - 1.0).abs() > 0.01) {
-      _scrollHold ??= Scrollable.of(context)?.position.hold(() {});
-    } else if (details.pointerCount <= 1 && (details.scale - 1.0).abs() <= 0.005) {
-      _scrollHold?.cancel();
-      _scrollHold = null;
-    }
-  }
-
-  void _onScaleEnd(ScaleEndDetails details) {
-    _scrollHold?.cancel();
-    _scrollHold = null;
-    _pointerCount = 0;
-  }
-
   @override
   void dispose() {
     _debounceTimer?.cancel();
-    _scrollHold?.cancel();
     super.dispose();
   }
 
-  void _onPointerDown(PointerDownEvent event) {
-    _pointerCount++;
-    // More aggressive: lock scroll as soon as 2 fingers detected
-    if (_pointerCount >= 2) {
-      _scrollHold ??= Scrollable.of(context)?.position.hold(() {});
-    }
-  }
-
-  void _onPointerUp(PointerEvent event) {
-    _pointerCount = (_pointerCount - 1).clamp(0, 10);
-    // Add small delay before releasing scroll lock for better UX
-    if (_pointerCount < 2) {
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (_pointerCount < 2) {
-          _scrollHold?.cancel();
-          _scrollHold = null;
-        }
-      });
-    }
+  void _showFullScreenViewer(BuildContext context, {Uint8List? pngData, String? svgData}) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => _FullScreenMermaidViewer(
+          pngData: pngData,
+          svgData: svgData,
+        ),
+      ),
+    );
   }
 
   @override
@@ -259,43 +221,59 @@ $escapedCode
   }
 
   Widget _buildErrorCard(String code) {
+    // Always show error details
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8.0),
       width: double.infinity,
       decoration: BoxDecoration(
         color: Colors.grey[100],
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[300]!),
+        border: Border.all(color: Colors.red[300]!),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            width: double.infinity,
             decoration: BoxDecoration(
-              color: Colors.blue[50],
+              color: Colors.red[50],
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(7),
                 topRight: Radius.circular(7),
               ),
             ),
             child: const Text(
-              'Mermaid Diagram (Error)',
+              'Mermaid Error',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
-                color: Colors.blue,
+                color: Colors.red,
               ),
             ),
           ),
+          if (_error != null)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              width: double.infinity,
+              color: Colors.red[50]?.withOpacity(0.5),
+              child: SelectableText(
+                _error!,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.red[700],
+                  fontFamily: 'Courier New',
+                ),
+              ),
+            ),
           Container(
             padding: const EdgeInsets.all(12),
             width: double.infinity,
-            child: Text(
-              code,
+            child: SelectableText(
+              code.length > 800 ? '${code.substring(0, 800)}...' : code,
               style: const TextStyle(
                 fontFamily: 'Courier New',
-                fontSize: 14,
+                fontSize: 11,
                 height: 1.4,
               ),
             ),
@@ -305,35 +283,6 @@ $escapedCode
     );
   }
 
-  /// Build WebView-based renderer that streams SVG back then uses flutter_svg to display.
-  Widget _buildWebViewFlow(BuildContext context) {
-    final processedCode =
-        _prepareCode(widget.mermaidCode, Theme.of(context).brightness == Brightness.dark);
-    final cacheKey = _cacheKey(processedCode, Theme.of(context).brightness == Brightness.dark);
-    final cached = _svgMemoryCache[cacheKey];
-    if (_svgData == null && cached != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        setState(() {
-          _svgData = cached;
-          _isLoading = false;
-        });
-      });
-    }
-
-    final currentSvg = _svgData ?? cached;
-
-    final content = currentSvg != null
-        ? _buildSvgContainer(currentSvg)
-        : _error != null
-            ? _buildErrorCard(widget.mermaidCode)
-            : _buildLoading();
-
-    return content;
-  }
-
-  String _cacheKey(String processedCode, bool isDark) =>
-      '${processedCode.hashCode}:${isDark ? 'd' : 'l'}';
 
   String _sanitizeSvg(String svgContent) {
     // Remove foreignObject blocks that flutter_svg renders as black boxes.
@@ -365,139 +314,6 @@ $escapedCode
     return cleaned;
   }
 
-  String _prepareCode(String raw, bool isDark) {
-    final cleanCode = raw
-        .replaceAll('&gt;', '>')
-        .replaceAll('&lt;', '<')
-        .replaceAll('&amp;', '&')
-        .replaceAll('&quot;', '"')
-        .replaceAll('&#39;', "'")
-        .trim();
-
-    final desiredTheme = isDark ? 'dark' : 'default';
-    const initPattern = r'^%%\{init:\s*\{([\s\S]*?)\}\s*%%\s*';
-    final regExp = RegExp(initPattern, multiLine: true);
-    final match = regExp.firstMatch(cleanCode);
-
-    final fallbackInit = {
-      'theme': desiredTheme,
-      'flowchart': {'htmlLabels': false},
-      'sequence': {'useMaxWidth': false},
-      'class': {'useMaxWidth': false},
-      'er': {'useMaxWidth': false},
-      'themeVariables': isDark
-          ? {
-              'primaryColor': '#58a6ff',
-              'secondaryColor': '#8b949e',
-              'tertiaryColor': '#1f6feb',
-              'lineColor': '#58a6ff',
-              'textColor': '#e6edf3',
-              'mainBkg': '#0d1117',
-              'edgeLabelBackground': '#0d1117',
-            }
-          : {
-              'primaryColor': '#1f6feb',
-              'secondaryColor': '#57606a',
-              'tertiaryColor': '#0969da',
-              'lineColor': '#1f6feb',
-              'textColor': '#24292f',
-              'mainBkg': '#ffffff',
-              'edgeLabelBackground': '#ffffff',
-            },
-    };
-
-    if (match != null) {
-      final initContent = match.group(1)!;
-      try {
-        final existing = json.decode('{${initContent}}') as Map<String, dynamic>;
-        existing.putIfAbsent('theme', () => desiredTheme);
-        final flowchart = (existing['flowchart'] is Map)
-            ? Map<String, dynamic>.from(existing['flowchart'] as Map)
-            : <String, dynamic>{};
-        flowchart['htmlLabels'] = false;
-        existing['flowchart'] = flowchart;
-
-        void ensureMaxWidth(String key) {
-          final current = (existing[key] is Map)
-              ? Map<String, dynamic>.from(existing[key] as Map)
-              : <String, dynamic>{};
-          current.putIfAbsent('useMaxWidth', () => false);
-          existing[key] = current;
-        }
-
-        ensureMaxWidth('sequence');
-        ensureMaxWidth('class');
-        ensureMaxWidth('er');
-
-        final themeVars = (existing['themeVariables'] is Map)
-            ? Map<String, dynamic>.from(existing['themeVariables'] as Map)
-            : <String, dynamic>{};
-        if (!themeVars.containsKey('primaryColor')) {
-          themeVars.addAll(fallbackInit['themeVariables'] as Map<String, dynamic>);
-        }
-        existing['themeVariables'] = themeVars;
-
-        final newInit = '%%{init: ${json.encode(existing)}}%%\n';
-        final remaining = cleanCode.substring(match.end);
-        return '$newInit$remaining';
-      } catch (_) {
-        // fall through to fallback inject
-      }
-    }
-
-    final initDirective = '%%{init: ${json.encode(fallbackInit)}}%%';
-    return '$initDirective\n$cleanCode';
-  }
-
-  Widget _buildSvgContainer(String svg) {
-    return Container(
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.grey[300]!),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: (widget.height ?? 400) * 1.25,
-            minHeight: widget.height ?? 350,
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final viewWidth = constraints.maxWidth;
-              return Listener(
-                onPointerDown: _onPointerDown,
-                onPointerUp: _onPointerUp,
-                onPointerCancel: _onPointerUp,
-                child: GestureDetector(
-                  onScaleStart: _onScaleStart,
-                  onScaleUpdate: _onScaleUpdate,
-                  onScaleEnd: _onScaleEnd,
-                  child: InteractiveViewer(
-                    panEnabled: true,
-                    scaleEnabled: true,
-                    minScale: 0.5,
-                    maxScale: 14.0,
-                    boundaryMargin: const EdgeInsets.all(140),
-                    constrained: true,
-                    child: SizedBox(
-                      width: viewWidth,
-                      child: SvgPicture.string(
-                        svg,
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final content = Builder(builder: (context) {
@@ -518,41 +334,34 @@ $escapedCode
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: (widget.height ?? 400) * 1.25,
-              minHeight: widget.height ?? 350,
-              ),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final viewWidth = constraints.maxWidth;
-                  return Listener(
-                    onPointerDown: _onPointerDown,
-                    onPointerUp: _onPointerUp,
-                    onPointerCancel: _onPointerUp,
-                    child: GestureDetector(
-                      onScaleStart: _onScaleStart,
-                      onScaleUpdate: _onScaleUpdate,
-                      onScaleEnd: _onScaleEnd,
-                      child: InteractiveViewer(
-                        panEnabled: true,
-                        scaleEnabled: true,
-                        minScale: 0.5,
-                        maxScale: 14.0,
-                        boundaryMargin: const EdgeInsets.all(140),
-                        constrained: true,
-                        child: SizedBox(
-                          width: viewWidth,
-                          child: Image.memory(
-                            _pngData!,
-                            fit: BoxFit.contain,
-                          ),
-                        ),
+            child: Stack(
+              children: [
+                // Use intrinsic height to show full image without cutting
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Image.memory(
+                    _pngData!,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Material(
+                    color: Colors.blue,
+                    borderRadius: BorderRadius.circular(20),
+                    elevation: 4,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: () => _showFullScreenViewer(context, pngData: _pngData),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Icon(Icons.fullscreen, color: Colors.white, size: 24),
                       ),
                     ),
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
         );
@@ -569,36 +378,34 @@ $escapedCode
           ),
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: (widget.height ?? 400) * 1.25,
-                minHeight: widget.height ?? 350,
-              ),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  final viewWidth = constraints.maxWidth;
-                  return GestureDetector(
-                    onScaleStart: _onScaleStart,
-                    onScaleUpdate: _onScaleUpdate,
-                    onScaleEnd: _onScaleEnd,
-                    child: InteractiveViewer(
-                      panEnabled: true,
-                      scaleEnabled: true,
-                      minScale: 0.6,
-                      maxScale: 14.0,
-                      boundaryMargin: const EdgeInsets.all(80),
-                      constrained: true,
-                      child: SizedBox(
-                        width: viewWidth,
-                        child: SvgPicture.string(
-                          sanitizedSvg,
-                          fit: BoxFit.contain,
-                        ),
+            child: Stack(
+              children: [
+                // Use intrinsic height to show full image without cutting
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: SvgPicture.string(
+                    sanitizedSvg,
+                    fit: BoxFit.contain,
+                  ),
+                ),
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Material(
+                    color: Colors.blue,
+                    borderRadius: BorderRadius.circular(20),
+                    elevation: 4,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(20),
+                      onTap: () => _showFullScreenViewer(context, svgData: sanitizedSvg),
+                      child: const Padding(
+                        padding: EdgeInsets.all(8),
+                        child: Icon(Icons.fullscreen, color: Colors.white, size: 24),
                       ),
                     ),
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
         );
@@ -629,6 +436,51 @@ $escapedCode
         }
       },
       child: content,
+    );
+  }
+}
+
+class _FullScreenMermaidViewer extends StatelessWidget {
+  final Uint8List? pngData;
+  final String? svgData;
+
+  const _FullScreenMermaidViewer({
+    this.pngData,
+    this.svgData,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return Scaffold(
+      backgroundColor: isDark ? Colors.black : Colors.white,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: Icon(Icons.close, color: isDark ? Colors.white : Colors.black),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+        title: Text(
+          'Diagram',
+          style: TextStyle(color: isDark ? Colors.white : Colors.black),
+        ),
+      ),
+      body: InteractiveViewer(
+        panEnabled: true,
+        scaleEnabled: true,
+        minScale: 0.5,
+        maxScale: 20.0,
+        boundaryMargin: const EdgeInsets.all(200),
+        child: Center(
+          child: pngData != null
+              ? Image.memory(pngData!, fit: BoxFit.contain)
+              : svgData != null
+                  ? SvgPicture.string(svgData!, fit: BoxFit.contain)
+                  : const Text('No diagram'),
+        ),
+      ),
     );
   }
 }

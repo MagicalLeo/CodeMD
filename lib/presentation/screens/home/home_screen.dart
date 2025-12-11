@@ -4,6 +4,7 @@ import '../../providers/document_provider.dart';
 import '../../providers/file_provider.dart';
 import '../../providers/vault_provider.dart';
 import '../editor/editor_screen.dart';
+import '../settings/settings_screen.dart';
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -22,6 +23,16 @@ class HomeScreen extends ConsumerWidget {
               ref.read(vaultProvider.notifier).clearError();
             },
             tooltip: 'Refresh file list',
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+            tooltip: 'Settings',
           ),
         ],
       ),

@@ -106,7 +106,7 @@ class MermaidHeadlessService {
 
   String _buildHtmlContent(String mermaidJs) {
     // Always use CDN for reliability - local asset loading has issues in headless webview
-    const scriptTag = '<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>';
+    const scriptTag = '<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.3/dist/mermaid.min.js"></script>';
 
     return '''
 <!DOCTYPE html>
@@ -197,9 +197,18 @@ class MermaidHeadlessService {
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            const ratio = 2.5;
-            const w = (img.width || width) * ratio;
-            const h = (img.height || height) * ratio;
+            // Limit max canvas size to avoid memory issues on mobile
+            const maxDim = 4096;
+            let ratio = 2.5;
+            let w = (img.width || width) * ratio;
+            let h = (img.height || height) * ratio;
+            // Scale down if too large
+            if (w > maxDim || h > maxDim) {
+              const scale = Math.min(maxDim / w, maxDim / h);
+              w = w * scale;
+              h = h * scale;
+              ratio = ratio * scale;
+            }
             canvas.width = w;
             canvas.height = h;
             const ctx = canvas.getContext('2d');

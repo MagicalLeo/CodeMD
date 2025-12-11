@@ -1,6 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter/services.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../../data/models/block_model.dart';
 import '../../providers/document_provider.dart';
 import '../../providers/text_scale_provider.dart';
@@ -79,7 +82,7 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
                   children: [
                     Icon(Icons.share),
                     SizedBox(width: 12),
-                    Text('Export Markdown'),
+                    Text('Share File'),
                   ],
                 ),
               ),
@@ -138,31 +141,46 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
   }
 
 
-  void _exportDocument(BuildContext context) {
+  Future<void> _exportDocument(BuildContext context) async {
+    final documentState = ref.read(documentProvider);
+    final document = documentState.currentDocument;
+    if (document == null) return;
+
     final markdown = ref.read(documentProvider.notifier).exportToMarkdown();
-    
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Exported Markdown'),
-          content: SingleChildScrollView(
-            child: SelectableText(
-              markdown,
-              style: const TextStyle(fontFamily: 'monospace'),
-            ),
+
+    try {
+      // If we have the original file path, share that file directly
+      if (document.filePath != null) {
+        final file = File(document.filePath!);
+        if (await file.exists()) {
+          await Share.shareXFiles(
+            [XFile(document.filePath!)],
+            text: document.title,
+          );
+          return;
+        }
+      }
+
+      // Otherwise, create a temp file and share it
+      final tempDir = await getTemporaryDirectory();
+      final fileName = '${document.title.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')}.md';
+      final tempFile = File('${tempDir.path}/$fileName');
+      await tempFile.writeAsString(markdown);
+
+      await Share.shareXFiles(
+        [XFile(tempFile.path)],
+        text: document.title,
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to share: $e'),
+            duration: const Duration(seconds: 3),
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-              },
-              child: const Text('Close'),
-            ),
-          ],
         );
-      },
-    );
+      }
+    }
   }
 
   void _copyToClipboard(BuildContext context) {

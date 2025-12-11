@@ -49,13 +49,16 @@ class MermaidRepositoryImpl implements MermaidRepository {
       '${processedCode.hashCode}:${isDark ? 'd' : 'l'}';
 
   String _prepareCode(String raw, bool isDark) {
-    final cleanCode = raw
+    var cleanCode = raw
         .replaceAll('&gt;', '>')
         .replaceAll('&lt;', '<')
         .replaceAll('&amp;', '&')
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'")
         .trim();
+
+    // Remove Obsidian embed syntax like ![[filename]] that may appear before the diagram
+    cleanCode = cleanCode.replaceAll(RegExp(r'^!\[\[[^\]]*\]\]\s*', multiLine: true), '');
 
     final desiredTheme = isDark ? 'dark' : 'default';
     const initPattern = r'^%%\{init:\s*\{([\s\S]*?)\}\s*%%\s*';

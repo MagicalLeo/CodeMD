@@ -231,7 +231,7 @@ class _BlockListState extends ConsumerState<BlockList> {
             _onScrollbarDrag(newProgress);
           },
           child: Container(
-            width: 28, // Wider touch target
+            width: 32, // Wider touch target
             color: Colors.transparent,
             child: Stack(
               children: [
@@ -241,12 +241,12 @@ class _BlockListState extends ConsumerState<BlockList> {
                   top: 8,
                   bottom: 8,
                   child: Container(
-                    width: 6,
+                    width: 8,
                     decoration: BoxDecoration(
                       color: isDarkMode
                           ? Colors.white.withOpacity(0.08)
                           : Colors.black.withOpacity(0.06),
-                      borderRadius: BorderRadius.circular(3),
+                      borderRadius: BorderRadius.circular(4),
                     ),
                   ),
                 ),
@@ -255,13 +255,13 @@ class _BlockListState extends ConsumerState<BlockList> {
                   right: 2,
                   top: thumbTop + 8,
                   child: Container(
-                    width: 10,
+                    width: 12,
                     height: thumbHeight - 16,
                     decoration: BoxDecoration(
                       color: _isDraggingScrollbar
                           ? (isDarkMode ? Colors.white.withOpacity(0.7) : Colors.black.withOpacity(0.5))
                           : (isDarkMode ? Colors.white.withOpacity(0.4) : Colors.black.withOpacity(0.3)),
-                      borderRadius: BorderRadius.circular(5),
+                      borderRadius: BorderRadius.circular(6),
                     ),
                   ),
                 ),
