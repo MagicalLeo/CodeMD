@@ -2,6 +2,8 @@ import 'package:markdown/markdown.dart' as md;
 import '../../data/models/block_model.dart';
 
 class MarkdownParser {
+  static final _footnoteDefinitionRegex = RegExp(r'^\[\^([^\]]+)\]:\s*(.+)$');
+
   static List<BlockModel> parseMarkdown(String markdown) {
     if (markdown.trim().isEmpty) {
       return [BlockModel(type: BlockType.paragraph, content: '')];
@@ -12,6 +14,20 @@ class MarkdownParser {
     final lines = markdown.split('\n');
     bool inMath = false;
     final mathLines = <String>[];
+    final footnotes = <String, String>{};
+
+    // First pass: extract footnote definitions
+    final processedLines = <String>[];
+    for (final line in lines) {
+      final match = _footnoteDefinitionRegex.firstMatch(line);
+      if (match != null) {
+        final id = match.group(1)!;
+        final content = match.group(2)!;
+        footnotes[id] = content;
+      } else {
+        processedLines.add(line);
+      }
+    }
 
     md.Document _buildDocument() {
       return md.Document(
@@ -31,12 +47,12 @@ class MarkdownParser {
       final doc = _buildDocument();
       final nodes = doc.parse(_preprocessTasks(buffer.toString()));
       for (final node in nodes) {
-        blocks.addAll(_convertNode(node));
+        blocks.addAll(_convertNode(node, footnotes: footnotes));
       }
       buffer.clear();
     }
 
-    for (final line in lines) {
+    for (final line in processedLines) {
       final trimmed = line.trimRight();
 
       // Handle single-line $$...$$
@@ -112,6 +128,19 @@ class MarkdownParser {
 
     flushBuffer();
 
+    // Add footnote definitions at the end
+    if (footnotes.isNotEmpty) {
+      int index = 1;
+      for (final entry in footnotes.entries) {
+        blocks.add(BlockModel(
+          type: BlockType.footnoteDefinition,
+          content: entry.value,
+          metadata: {'id': entry.key, 'index': index},
+        ));
+        index++;
+      }
+    }
+
     if (blocks.isEmpty) {
       blocks.add(BlockModel(type: BlockType.paragraph, content: ''));
     }
@@ -130,8 +159,74 @@ class MarkdownParser {
     });
   }
 
-  static List<BlockModel> _convertNode(md.Node node, {int indentLevel = 0}) {
+  static List<BlockModel> _convertNode(md.Node node, {int indentLevel = 0, Map<String, String>? footnotes}) {
     final blocks = <BlockModel>[];
+    footnotes ??= {};
+
+    String _toMarkdown(md.Node n) {
+      if (n is md.Text) return n.text;
+      if (n is md.Element) {
+        switch (n.tag) {
+          case 'p':
+            return (n.children ?? []).map(_toMarkdown).join();
+          case 'strong':
+            return '**${(n.children ?? []).map(_toMarkdown).join()}**';
+          case 'em':
+            return '*${(n.children ?? []).map(_toMarkdown).join()}*';
+          case 'code':
+            return '`${(n.children ?? []).map(_toMarkdown).join()}`';
+          case 'br':
+            return '\n';
+          case 'ul':
+            return (n.children ?? [])
+                .map((c) => '- ${_toMarkdown(c)}')
+                .join('\n');
+          case 'ol':
+            int idx = 1;
+            return (n.children ?? [])
+                .map((c) => '${idx++}. ${_toMarkdown(c)}')
+                .join('\n');
+          case 'li':
+            return (n.children ?? []).map(_toMarkdown).join();
+          case 'blockquote':
+            final content = (n.children ?? []).map(_toMarkdown).join('\n');
+            return content.split('\n').map((l) => '> $l').join('\n');
+          case 'pre':
+            // Handle code blocks - find the code element inside
+            final codeElement = n.children?.firstWhere(
+              (child) => child is md.Element && child.tag == 'code',
+              orElse: () => n,
+            );
+            String language = '';
+            String content = '';
+            if (codeElement is md.Element) {
+              final classes = codeElement.attributes['class'];
+              if (classes != null && classes.startsWith('language-')) {
+                language = classes.substring('language-'.length);
+              }
+              content = _decodeHtmlEntities(codeElement.textContent);
+            } else {
+              content = _decodeHtmlEntities(n.textContent);
+            }
+            return '```$language\n$content\n```';
+          case 'h1':
+            return '# ${(n.children ?? []).map(_toMarkdown).join()}';
+          case 'h2':
+            return '## ${(n.children ?? []).map(_toMarkdown).join()}';
+          case 'h3':
+            return '### ${(n.children ?? []).map(_toMarkdown).join()}';
+          case 'h4':
+            return '#### ${(n.children ?? []).map(_toMarkdown).join()}';
+          case 'h5':
+            return '##### ${(n.children ?? []).map(_toMarkdown).join()}';
+          case 'h6':
+            return '###### ${(n.children ?? []).map(_toMarkdown).join()}';
+          default:
+            return (n.children ?? []).map(_toMarkdown).join();
+        }
+      }
+      return '';
+    }
 
     if (node is md.Element) {
       switch (node.tag) {
@@ -189,15 +284,54 @@ class MarkdownParser {
           }
           break;
         case 'blockquote':
-          for (final child in node.children ?? []) {
-            final childBlocks = _convertNode(child, indentLevel: indentLevel);
-            for (final block in childBlocks) {
-              blocks.add(block.copyWith(type: BlockType.blockquote));
+          final combinedText = (node.children ?? [])
+              .map((c) => _toMarkdown(c))
+              .where((t) => t.isNotEmpty)
+              .join('\n')
+              .trim();
+          final admonitionMatch = RegExp(r'^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*(.*)', caseSensitive: false, dotAll: true)
+              .firstMatch(combinedText);
+          if (admonitionMatch != null) {
+            final kind = admonitionMatch.group(1)!.toLowerCase();
+            final body = admonitionMatch.group(2)?.trim() ?? '';
+            
+            // Parse the admonition content as markdown to preserve structure
+            final innerDoc = md.Document(
+              extensionSet: md.ExtensionSet(
+                md.ExtensionSet.gitHubFlavored.blockSyntaxes,
+                [
+                  md.EmojiSyntax(),
+                  md.InlineHtmlSyntax(),
+                  ...md.ExtensionSet.gitHubFlavored.inlineSyntaxes,
+                ],
+              ),
+            );
+            final innerNodes = innerDoc.parse(body);
+            final innerBlocks = <BlockModel>[];
+            for (final innerNode in innerNodes) {
+              innerBlocks.addAll(_convertNode(innerNode, indentLevel: indentLevel, footnotes: footnotes));
+            }
+            
+            // Create a special admonition container block with inner content
+            blocks.add(BlockModel(
+              type: BlockType.blockquote,
+              content: body, // Keep raw content for fallback
+              indentLevel: indentLevel,
+              metadata: {
+                'admonition': kind,
+                'innerBlocks': innerBlocks, // Add parsed blocks
+              },
+            ));
+          } else {
+            for (final child in node.children ?? []) {
+              final childBlocks = _convertNode(child, indentLevel: indentLevel, footnotes: footnotes);
+              for (final block in childBlocks) {
+                blocks.add(block.copyWith(type: BlockType.blockquote));
+              }
             }
           }
           break;
         case 'ul':
-          int order = 1;
           for (final child in node.children ?? []) {
             if (child is md.Element && child.tag == 'li') {
               final text = _renderInlineMarkdown(child);
@@ -238,7 +372,7 @@ class MarkdownParser {
               for (final nestedChild in child.children ?? []) {
                 if (nestedChild is md.Element && 
                     (nestedChild.tag == 'ul' || nestedChild.tag == 'ol')) {
-                  blocks.addAll(_convertNode(nestedChild, indentLevel: indentLevel + 1));
+                  blocks.addAll(_convertNode(nestedChild, indentLevel: indentLevel + 1, footnotes: footnotes));
                 }
               }
             }
@@ -260,7 +394,7 @@ class MarkdownParser {
               for (final nestedChild in child.children ?? []) {
                 if (nestedChild is md.Element && 
                     (nestedChild.tag == 'ul' || nestedChild.tag == 'ol')) {
-                  blocks.addAll(_convertNode(nestedChild, indentLevel: indentLevel + 1));
+                  blocks.addAll(_convertNode(nestedChild, indentLevel: indentLevel + 1, footnotes: footnotes));
                 }
               }
             }
@@ -271,18 +405,18 @@ class MarkdownParser {
             (child) => child is md.Element && child.tag == 'code',
             orElse: () => node,
           );
-          
+
           String content = '';
           String? language;
-          
+
           if (codeElement is md.Element) {
-            content = codeElement.textContent;
+            content = _decodeHtmlEntities(codeElement.textContent);
             final classes = codeElement.attributes['class'];
             if (classes != null && classes.startsWith('language-')) {
               language = classes.substring('language-'.length);
             }
           } else {
-            content = node.textContent;
+            content = _decodeHtmlEntities(node.textContent);
           }
           
           // Check if it's a Mermaid diagram
@@ -501,5 +635,18 @@ class MarkdownParser {
     // Detect $...$ but avoid $$...$$
     final regex = RegExp(r'(?<!\\)\$(?!\$)(.+?)(?<!\\)\$');
     return regex.hasMatch(text);
+  }
+
+  static String _decodeHtmlEntities(String text) {
+    return text
+        .replaceAll('&quot;', '"')
+        .replaceAll('&apos;', "'")
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&#39;', "'")
+        .replaceAll('&#x27;', "'")
+        .replaceAll('&#x2F;', '/')
+        .replaceAll('&nbsp;', ' ');
   }
 }

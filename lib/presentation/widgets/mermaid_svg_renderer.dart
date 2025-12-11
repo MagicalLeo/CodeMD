@@ -40,16 +40,17 @@ class _MermaidSvgRendererState extends State<MermaidSvgRenderer> {
   int _pointerCount = 0;
 
   void _onScaleStart(ScaleStartDetails details) {
-    // Only lock the scroll when a true pinch (2+ pointers) starts.
+    // Lock scroll more aggressively for better zoom UX
     if (details.pointerCount > 1) {
       _scrollHold ??= Scrollable.of(context)?.position.hold(() {});
     }
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    if (details.pointerCount > 1 || details.scale != 1.0) {
+    // More sensitive detection: smaller scale threshold and faster lock
+    if (details.pointerCount > 1 || (details.scale - 1.0).abs() > 0.01) {
       _scrollHold ??= Scrollable.of(context)?.position.hold(() {});
-    } else {
+    } else if (details.pointerCount <= 1 && (details.scale - 1.0).abs() <= 0.005) {
       _scrollHold?.cancel();
       _scrollHold = null;
     }
@@ -70,6 +71,7 @@ class _MermaidSvgRendererState extends State<MermaidSvgRenderer> {
 
   void _onPointerDown(PointerDownEvent event) {
     _pointerCount++;
+    // More aggressive: lock scroll as soon as 2 fingers detected
     if (_pointerCount >= 2) {
       _scrollHold ??= Scrollable.of(context)?.position.hold(() {});
     }
@@ -77,9 +79,14 @@ class _MermaidSvgRendererState extends State<MermaidSvgRenderer> {
 
   void _onPointerUp(PointerEvent event) {
     _pointerCount = (_pointerCount - 1).clamp(0, 10);
+    // Add small delay before releasing scroll lock for better UX
     if (_pointerCount < 2) {
-      _scrollHold?.cancel();
-      _scrollHold = null;
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (_pointerCount < 2) {
+          _scrollHold?.cancel();
+          _scrollHold = null;
+        }
+      });
     }
   }
 
@@ -232,7 +239,7 @@ $escapedCode
   Widget _buildLoading() {
     return Container(
       width: widget.width ?? double.infinity,
-      height: widget.height ?? 260,
+      height: widget.height ?? 400,
       decoration: BoxDecoration(
         color: Colors.grey[100],
         borderRadius: BorderRadius.circular(8),
@@ -453,8 +460,8 @@ $escapedCode
         borderRadius: BorderRadius.circular(8),
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxHeight: (widget.height ?? 260) * 1.25,
-            minHeight: widget.height ?? 230,
+            maxHeight: (widget.height ?? 400) * 1.25,
+            minHeight: widget.height ?? 350,
           ),
           child: LayoutBuilder(
             builder: (context, constraints) {
@@ -513,8 +520,8 @@ $escapedCode
             borderRadius: BorderRadius.circular(8),
             child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: (widget.height ?? 260) * 1.25,
-              minHeight: widget.height ?? 230,
+              maxHeight: (widget.height ?? 400) * 1.25,
+              minHeight: widget.height ?? 350,
               ),
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -552,6 +559,8 @@ $escapedCode
       }
 
       if (_svgData != null) {
+        // Sanitize SVG to remove foreignObject elements that cause black blocks
+        final sanitizedSvg = _sanitizeSvg(_svgData!);
         return Container(
           decoration: BoxDecoration(
             color: Colors.white,
@@ -562,8 +571,8 @@ $escapedCode
             borderRadius: BorderRadius.circular(8),
             child: ConstrainedBox(
               constraints: BoxConstraints(
-                maxHeight: (widget.height ?? 260) * 1.25,
-                minHeight: widget.height ?? 230,
+                maxHeight: (widget.height ?? 400) * 1.25,
+                minHeight: widget.height ?? 350,
               ),
               child: LayoutBuilder(
                 builder: (context, constraints) {
@@ -582,7 +591,7 @@ $escapedCode
                       child: SizedBox(
                         width: viewWidth,
                         child: SvgPicture.string(
-                          _svgData!,
+                          sanitizedSvg,
                           fit: BoxFit.contain,
                         ),
                       ),
@@ -597,7 +606,7 @@ $escapedCode
 
       return Container(
         width: widget.width ?? double.infinity,
-        height: widget.height ?? 180,
+        height: widget.height ?? 320,
         decoration: BoxDecoration(
           color: Colors.grey[100],
           borderRadius: BorderRadius.circular(8),

@@ -28,6 +28,7 @@ class MermaidRepositoryImpl implements MermaidRepository {
       return MermaidRenderOutput(svg: cached);
     }
 
+    // Request PNG first to avoid SVG black-block issues on some renderers.
     final result = await _headless.render(processed, isDark: isDark, requestPng: true);
     if (result.error != null) {
       return MermaidRenderOutput(error: result.error);

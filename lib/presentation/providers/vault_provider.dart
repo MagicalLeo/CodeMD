@@ -11,13 +11,21 @@ class VaultState {
   final bool isLoading;
   final String? error;
   final String? vaultPath;
+  final List<VaultFileModel> _pinnedFiles;
+  final List<VaultFileModel> _recentFiles;
 
-  const VaultState({
+  VaultState({
     this.files = const [],
     this.isLoading = false,
     this.error,
     this.vaultPath,
-  });
+    List<VaultFileModel>? pinnedFiles,
+    List<VaultFileModel>? recentFiles,
+  }) : _pinnedFiles = pinnedFiles ?? files.where((f) => f.isPinned).toList(),
+       _recentFiles = recentFiles ?? (files
+          .where((f) => !f.isPinned)
+          .toList()
+        ..sort((a, b) => b.lastOpened.compareTo(a.lastOpened)));
 
   VaultState copyWith({
     List<VaultFileModel>? files,
@@ -25,26 +33,29 @@ class VaultState {
     String? error,
     String? vaultPath,
   }) {
+    final newFiles = files ?? this.files;
     return VaultState(
-      files: files ?? this.files,
+      files: newFiles,
       isLoading: isLoading ?? this.isLoading,
       error: error ?? this.error,
       vaultPath: vaultPath ?? this.vaultPath,
+      pinnedFiles: newFiles.where((f) => f.isPinned).toList(),
+      recentFiles: newFiles
+          .where((f) => !f.isPinned)
+          .toList()
+        ..sort((a, b) => b.lastOpened.compareTo(a.lastOpened)),
     );
   }
 
-  List<VaultFileModel> get pinnedFiles => files.where((f) => f.isPinned).toList();
-  List<VaultFileModel> get recentFiles => files
-      .where((f) => !f.isPinned)
-      .toList()
-    ..sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
+  List<VaultFileModel> get pinnedFiles => _pinnedFiles;
+  List<VaultFileModel> get recentFiles => _recentFiles;
 }
 
 class VaultNotifier extends StateNotifier<VaultState> {
   final DocumentNotifier documentNotifier;
   final FileNotifier fileNotifier;
 
-  VaultNotifier(this.documentNotifier, this.fileNotifier) : super(const VaultState()) {
+  VaultNotifier(this.documentNotifier, this.fileNotifier) : super(VaultState()) {
     _initializeVault();
   }
 
@@ -161,10 +172,45 @@ class VaultNotifier extends StateNotifier<VaultState> {
 
   Future<void> openFile(String filePath) async {
     try {
-      await updateLastOpened(filePath);
+      // Load file first, then update timestamp silently to avoid UI flicker
       await fileNotifier.loadRecentFile(filePath);
+      // Update timestamp in background without triggering immediate UI update
+      await _updateLastOpenedSilently(filePath);
     } catch (e) {
       state = state.copyWith(error: 'Failed to open file: $e');
+    }
+  }
+
+  Future<void> _updateLastOpenedSilently(String filePath) async {
+    // Update timestamp without immediately triggering state change
+    final updatedFiles = state.files.map((f) {
+      if (f.path == filePath) {
+        return f.copyWith(lastOpened: DateTime.now());
+      }
+      return f;
+    }).toList();
+    
+    // Save to disk but delay state update to prevent rebuild loops
+    try {
+      final appDir = await getApplicationDocumentsDirectory();
+      final vaultFile = File('${appDir.path}/CodeMD/vault.json');
+      
+      final data = {
+        'files': updatedFiles.map((f) => f.toJson()).toList(),
+        'lastUpdated': DateTime.now().toIso8601String(),
+      };
+      
+      await vaultFile.writeAsString(jsonEncode(data));
+      
+      // Delay state update to break rebuild cycles
+      await Future.delayed(const Duration(milliseconds: 100));
+      
+      // Only update if we're still mounted and no other operations are in progress
+      if (mounted) {
+        state = state.copyWith(files: updatedFiles);
+      }
+    } catch (e) {
+      // Silent error - don't update state on error to avoid rebuild loops
     }
   }
 

@@ -8,15 +8,24 @@
   <script>
     (function loadMermaid() {
       const localScript = document.createElement('script');
-      // Use older mermaid for stability on WebView; adjust if you ship a different version.
-      localScript.src = 'mermaid.min.js';
+      // Try absolute path for release mode, relative path for debug mode
+      const basePath = 'file:///android_asset/flutter_assets/assets/mermaid/';
+      localScript.src = basePath + 'mermaid.min.js';
       localScript.onload = () => window.__mermaidReady = true;
       localScript.onerror = () => {
-        const cdn = document.createElement('script');
-        cdn.src = 'https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js';
-        cdn.onload = () => window.__mermaidReady = true;
-        cdn.onerror = () => sendToFlutter({ type: 'renderError', requestId: 'init', error: 'Mermaid JS load failed' });
-        document.head.appendChild(cdn);
+        // Fallback to relative path (works in debug mode)
+        const relativeScript = document.createElement('script');
+        relativeScript.src = 'mermaid.min.js';
+        relativeScript.onload = () => window.__mermaidReady = true;
+        relativeScript.onerror = () => {
+          // Final fallback to CDN
+          const cdn = document.createElement('script');
+          cdn.src = 'https://cdn.jsdelivr.net/npm/mermaid@9.4.3/dist/mermaid.min.js';
+          cdn.onload = () => window.__mermaidReady = true;
+          cdn.onerror = () => sendToFlutter({ type: 'renderError', requestId: 'init', error: 'Mermaid JS load failed' });
+          document.head.appendChild(cdn);
+        };
+        document.head.appendChild(relativeScript);
       };
       document.head.appendChild(localScript);
     })();

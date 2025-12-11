@@ -19,6 +19,7 @@ enum BlockType {
   table,
   mermaid,
   math,
+  footnoteDefinition,
 }
 
 class BlockModel extends Equatable {

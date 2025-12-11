@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../../data/models/block_model.dart';
+import '../../core/services/reading_position_service.dart';
 import '../providers/document_provider.dart';
 import 'blocks/view_only_block.dart';
 import 'blocks/editable_block.dart';
@@ -9,12 +12,14 @@ class BlockList extends ConsumerStatefulWidget {
   final List<BlockModel> blocks;
   final bool isEditMode;
   final Function(String)? onBlockFocused;
+  final String? filePath;
 
   const BlockList({
     super.key,
     required this.blocks,
     required this.isEditMode,
     this.onBlockFocused,
+    this.filePath,
   });
 
   @override
@@ -22,14 +27,120 @@ class BlockList extends ConsumerStatefulWidget {
 }
 
 class _BlockListState extends ConsumerState<BlockList> {
-  final ScrollController _scrollController = ScrollController();
+  final ItemScrollController _itemScrollController = ItemScrollController();
+  final ItemPositionsListener _itemPositionsListener = ItemPositionsListener.create();
+
   final Map<String, GlobalKey> _blockKeys = {};
   String? _focusedBlockId;
+  Timer? _savePositionTimer;
+  bool _hasRestoredPosition = false;
+
+  // For custom scrollbar
+  double _scrollProgress = 0.0;
+  bool _isDraggingScrollbar = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _itemPositionsListener.itemPositions.addListener(_onPositionChanged);
+
+    // Restore position after build
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreReadingPosition();
+    });
+  }
+
+  @override
+  void didUpdateWidget(BlockList oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.filePath != widget.filePath) {
+      _hasRestoredPosition = false;
+      _scrollProgress = 0.0;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _restoreReadingPosition();
+      });
+    }
+  }
 
   @override
   void dispose() {
-    _scrollController.dispose();
+    _savePositionTimer?.cancel();
+    _saveCurrentPosition();
+    _itemPositionsListener.itemPositions.removeListener(_onPositionChanged);
     super.dispose();
+  }
+
+  void _onPositionChanged() {
+    if (_isDraggingScrollbar) return;
+
+    final positions = _itemPositionsListener.itemPositions.value;
+    if (positions.isEmpty || widget.blocks.isEmpty) return;
+
+    // Calculate scroll progress based on visible items
+    final sortedPositions = positions.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+
+    final firstVisible = sortedPositions.first;
+    final progress = (firstVisible.index + (1 - firstVisible.itemLeadingEdge)) / widget.blocks.length;
+
+    setState(() {
+      _scrollProgress = progress.clamp(0.0, 1.0);
+    });
+
+    // Debounce position saving
+    _savePositionTimer?.cancel();
+    _savePositionTimer = Timer(const Duration(milliseconds: 1500), () {
+      _saveCurrentPosition();
+    });
+  }
+
+  Future<void> _saveCurrentPosition() async {
+    if (widget.filePath == null) return;
+
+    final positions = _itemPositionsListener.itemPositions.value;
+    if (positions.isEmpty) return;
+
+    final sortedPositions = positions.toList()
+      ..sort((a, b) => a.index.compareTo(b.index));
+
+    final firstVisible = sortedPositions.first;
+    await ReadingPositionService.savePosition(
+      widget.filePath!,
+      firstVisible.index,
+      firstVisible.itemLeadingEdge,
+    );
+  }
+
+  Future<void> _restoreReadingPosition() async {
+    if (widget.filePath == null || _hasRestoredPosition) return;
+    _hasRestoredPosition = true;
+
+    final position = await ReadingPositionService.getPosition(widget.filePath!);
+    if (position == null || !mounted) return;
+
+    final (blockIndex, alignment) = position;
+    if (blockIndex >= widget.blocks.length) return;
+
+    // Wait a bit for the list to be ready
+    await Future.delayed(const Duration(milliseconds: 50));
+    if (!mounted) return;
+
+    _itemScrollController.jumpTo(
+      index: blockIndex,
+      alignment: alignment.clamp(0.0, 0.5),
+    );
+  }
+
+  void _onScrollbarDrag(double progress) {
+    if (widget.blocks.isEmpty) return;
+
+    final targetIndex = (progress * widget.blocks.length).floor().clamp(0, widget.blocks.length - 1);
+
+    _itemScrollController.jumpTo(index: targetIndex);
+
+    setState(() {
+      _scrollProgress = progress;
+    });
   }
 
   @override
@@ -56,49 +167,115 @@ class _BlockListState extends ConsumerState<BlockList> {
       );
     }
 
-    // Using CustomScrollView with SliverList for optimal performance
-    return CustomScrollView(
-      controller: _scrollController,
-      slivers: [
-        SliverPadding(
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+
+    return Stack(
+      children: [
+        // Main list
+        ScrollablePositionedList.builder(
+          itemCount: widget.blocks.length,
+          itemScrollController: _itemScrollController,
+          itemPositionsListener: _itemPositionsListener,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                if (index >= widget.blocks.length) return null;
-                
-                final block = widget.blocks[index];
-                
-                return RepaintBoundary(
-                  key: ValueKey(block.id),
-                  child: Padding(
-                    padding: EdgeInsets.only(
-                      left: block.indentLevel * 24.0,
-                      bottom: 2.0, // Reduced padding for performance
-                    ),
-                    child: ViewOnlyBlock(block: block), // Direct view-only blocks
-                  ),
-                );
-              },
-              childCount: widget.blocks.length,
-              // Extreme performance optimizations
-              addAutomaticKeepAlives: false,
-              addRepaintBoundaries: false, // We handle it manually above
-              addSemanticIndexes: false,
-              findChildIndexCallback: (Key key) {
-                final valueKey = key as ValueKey<String>;
-                return widget.blocks.indexWhere((block) => block.id == valueKey.value);
-              },
-            ),
-          ),
+          itemBuilder: (context, index) {
+            final block = widget.blocks[index];
+            return RepaintBoundary(
+              key: ValueKey(block.id),
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: block.indentLevel * 24.0,
+                  bottom: 2.0,
+                ),
+                child: ViewOnlyBlock(block: block),
+              ),
+            );
+          },
+        ),
+        // Custom scrollbar - larger touch target
+        Positioned(
+          right: 0,
+          top: 0,
+          bottom: 0,
+          child: _buildScrollbar(isDarkMode),
         ),
       ],
     );
   }
 
+  Widget _buildScrollbar(bool isDarkMode) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewportHeight = constraints.maxHeight;
+        if (viewportHeight <= 0) return const SizedBox.shrink();
+
+        // Thumb size proportional to visible content
+        final thumbHeight = (viewportHeight * 0.15).clamp(50.0, 120.0);
+        final trackHeight = viewportHeight - thumbHeight;
+        final thumbTop = (_scrollProgress * trackHeight).clamp(0.0, trackHeight);
+
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onVerticalDragStart: (details) {
+            _isDraggingScrollbar = true;
+          },
+          onVerticalDragUpdate: (details) {
+            final newProgress = ((details.localPosition.dy - thumbHeight / 2) / trackHeight).clamp(0.0, 1.0);
+            _onScrollbarDrag(newProgress);
+          },
+          onVerticalDragEnd: (_) {
+            _isDraggingScrollbar = false;
+            _saveCurrentPosition();
+          },
+          onTapDown: (details) {
+            final newProgress = (details.localPosition.dy / viewportHeight).clamp(0.0, 1.0);
+            _onScrollbarDrag(newProgress);
+          },
+          child: Container(
+            width: 28, // Wider touch target
+            color: Colors.transparent,
+            child: Stack(
+              children: [
+                // Track background
+                Positioned(
+                  right: 4,
+                  top: 8,
+                  bottom: 8,
+                  child: Container(
+                    width: 6,
+                    decoration: BoxDecoration(
+                      color: isDarkMode
+                          ? Colors.white.withOpacity(0.08)
+                          : Colors.black.withOpacity(0.06),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                ),
+                // Thumb
+                Positioned(
+                  right: 2,
+                  top: thumbTop + 8,
+                  child: Container(
+                    width: 10,
+                    height: thumbHeight - 16,
+                    decoration: BoxDecoration(
+                      color: _isDraggingScrollbar
+                          ? (isDarkMode ? Colors.white.withOpacity(0.7) : Colors.black.withOpacity(0.5))
+                          : (isDarkMode ? Colors.white.withOpacity(0.4) : Colors.black.withOpacity(0.3)),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _buildBlockItem(BlockModel block) {
     final key = _blockKeys[block.id];
-    
+
     if (widget.isEditMode) {
       return GestureDetector(
         onTap: () {
@@ -110,9 +287,7 @@ class _BlockListState extends ConsumerState<BlockList> {
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Block handle for dragging (Notion-style)
             _buildBlockHandle(block),
-            // Main block content
             Expanded(
               child: EditableBlock(
                 key: key,
@@ -126,7 +301,6 @@ class _BlockListState extends ConsumerState<BlockList> {
                 },
                 onSubmitted: () {
                   ref.read(documentProvider.notifier).insertBlockAfter(block.id);
-                  // Focus next block after a short delay
                   Future.delayed(const Duration(milliseconds: 100), () {
                     final blocks = ref.read(documentProvider).currentDocument?.blocks ?? [];
                     final currentIndex = blocks.indexWhere((b) => b.id == block.id);

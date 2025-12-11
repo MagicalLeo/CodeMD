@@ -88,18 +88,44 @@ class FileNotifier extends StateNotifier<FileState> {
   Future<void> _loadFileFromPath(String filePath) async {
     try {
       final file = File(filePath);
+      
+      // Enhanced file existence check for unicode paths
+      if (!await file.exists()) {
+        state = state.copyWith(
+          isLoading: false,
+          error: 'File not found: $filePath',
+        );
+        return;
+      }
+
       final fileSize = await file.length();
       
       // Use Isolate for files >1MB to prevent UI blocking
       String content;
-      if (fileSize > 1024 * 1024 && !kIsWeb) {
-        content = await compute(_readFileSafely, filePath);
-      } else {
-        content = await file.readAsString();
+      try {
+        if (fileSize > 1024 * 1024 && !kIsWeb) {
+          content = await compute(_readFileSafely, filePath);
+        } else {
+          // Try multiple encoding approaches for Chinese files
+          try {
+            content = await file.readAsString(encoding: utf8);
+          } catch (e) {
+            // Fallback to system encoding
+            final bytes = await file.readAsBytes();
+            content = utf8.decode(bytes, allowMalformed: true);
+          }
+        }
+      } catch (e) {
+        state = state.copyWith(
+          isLoading: false,
+          error: 'Failed to read file content: $e\nPath: $filePath',
+        );
+        return;
       }
 
-      final fileName = filePath.split(Platform.pathSeparator).last;
-      final title = fileName.replaceAll(RegExp(r'\.(md|markdown|txt)$'), '');
+      // Enhanced filename extraction for Unicode paths
+      final fileName = _extractFileName(filePath);
+      final title = fileName.replaceAll(RegExp(r'\.(md|markdown|txt)$', caseSensitive: false), '');
 
       documentNotifier.loadMarkdown(content, title: title, filePath: filePath);
       
@@ -117,8 +143,28 @@ class FileNotifier extends StateNotifier<FileState> {
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
-        error: 'Failed to load file: $e',
+        error: 'Failed to load file: $e\nPath: $filePath',
       );
+    }
+  }
+
+  String _extractFileName(String filePath) {
+    try {
+      // Handle both forward and backslash separators
+      final separators = [Platform.pathSeparator, '/', '\\'];
+      String fileName = filePath;
+      
+      for (final separator in separators) {
+        final parts = fileName.split(separator);
+        if (parts.length > 1) {
+          fileName = parts.last;
+        }
+      }
+      
+      return fileName;
+    } catch (e) {
+      // Fallback: return original path
+      return filePath;
     }
   }
 
@@ -171,7 +217,13 @@ class FileNotifier extends StateNotifier<FileState> {
 // Isolate function for reading large files
 String _readFileSafely(String filePath) {
   final file = File(filePath);
-  return file.readAsStringSync();
+  try {
+    return file.readAsStringSync(encoding: utf8);
+  } catch (e) {
+    // Fallback for encoding issues
+    final bytes = file.readAsBytesSync();
+    return utf8.decode(bytes, allowMalformed: true);
+  }
 }
 
 final fileProvider = StateNotifierProvider<FileNotifier, FileState>((ref) {

@@ -17,16 +17,11 @@ class HomeScreen extends ConsumerWidget {
         title: const Text('CodeMD'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.add),
+            icon: const Icon(Icons.refresh),
             onPressed: () {
-              ref.read(documentProvider.notifier).createNewDocument();
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const EditorScreen(),
-                ),
-              );
+              ref.read(vaultProvider.notifier).clearError();
             },
+            tooltip: 'Refresh file list',
           ),
         ],
       ),
@@ -127,31 +122,13 @@ Made with ❤️ using Flutter
             ),
             const SizedBox(height: 8),
             Text(
-              'A blazing fast Markdown editor',
-              style: Theme.of(context).textTheme.bodyLarge,
+              'Lightning-fast Markdown reader',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: Theme.of(context).textTheme.bodyMedium?.color,
+              ),
             ),
             const SizedBox(height: 32),
             ElevatedButton.icon(
-              onPressed: () {
-                ref.read(documentProvider.notifier).createNewDocument();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const EditorScreen(),
-                  ),
-                );
-              },
-              icon: const Icon(Icons.add),
-              label: const Text('Create New Document'),
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 24,
-                  vertical: 12,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton.icon(
               onPressed: () async {
                 await ref.read(fileProvider.notifier).pickAndLoadFile();
                 final doc = ref.read(documentProvider).currentDocument;
@@ -172,8 +149,8 @@ Made with ❤️ using Flutter
                 }
               },
               icon: const Icon(Icons.folder_open),
-              label: const Text('Open Document'),
-              style: OutlinedButton.styleFrom(
+              label: const Text('Open Markdown File'),
+              style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 24,
                   vertical: 12,
@@ -209,22 +186,6 @@ Made with ❤️ using Flutter
           sliver: SliverToBoxAdapter(
             child: Row(
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      ref.read(documentProvider.notifier).createNewDocument();
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (context) => const EditorScreen(),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.add, size: 20),
-                    label: const Text('New'),
-                  ),
-                ),
-                const SizedBox(width: 12),
                 Expanded(
                   child: OutlinedButton.icon(
                     onPressed: () async {
@@ -270,7 +231,9 @@ Made with ❤️ using Flutter
           SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, index) {
-                final file = vaultState.pinnedFiles[index];
+                final pinnedFiles = vaultState.pinnedFiles;
+                if (index >= pinnedFiles.length) return const SizedBox();
+                final file = pinnedFiles[index];
                 return _buildFileItem(context, ref, file);
               },
               childCount: vaultState.pinnedFiles.length,
@@ -294,7 +257,9 @@ Made with ❤️ using Flutter
           SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, index) {
-                final file = vaultState.recentFiles[index];
+                final recentFiles = vaultState.recentFiles;
+                if (index >= recentFiles.length) return const SizedBox();
+                final file = recentFiles[index];
                 return _buildFileItem(context, ref, file);
               },
               childCount: vaultState.recentFiles.length,
@@ -359,13 +324,21 @@ Made with ❤️ using Flutter
           ],
         ),
         onTap: () async {
-          await ref.read(vaultProvider.notifier).openFile(file.path);
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (context) => const EditorScreen(),
-            ),
-          );
+          // Load file first without triggering immediate state updates
+          await ref.read(fileProvider.notifier).loadRecentFile(file.path);
+          
+          // Then navigate
+          if (context.mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const EditorScreen(),
+              ),
+            );
+            
+            // Update timestamp quietly in background (no immediate state change)
+            ref.read(vaultProvider.notifier).updateLastOpened(file.path);
+          }
         },
       ),
     );
