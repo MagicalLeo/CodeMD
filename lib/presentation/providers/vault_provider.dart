@@ -8,17 +8,23 @@ import 'file_provider.dart';
 
 class VaultState {
   final List<VaultFileModel> files;
+  final List<VaultFolderModel> folders;
   final bool isLoading;
   final String? error;
   final String? vaultPath;
+  final String? currentFolder; // null = all files view
+  final String searchQuery;
   final List<VaultFileModel> _pinnedFiles;
   final List<VaultFileModel> _recentFiles;
 
   VaultState({
     this.files = const [],
+    this.folders = const [],
     this.isLoading = false,
     this.error,
     this.vaultPath,
+    this.currentFolder,
+    this.searchQuery = '',
     List<VaultFileModel>? pinnedFiles,
     List<VaultFileModel>? recentFiles,
   }) : _pinnedFiles = pinnedFiles ?? files.where((f) => f.isPinned).toList(),
@@ -29,16 +35,23 @@ class VaultState {
 
   VaultState copyWith({
     List<VaultFileModel>? files,
+    List<VaultFolderModel>? folders,
     bool? isLoading,
     String? error,
     String? vaultPath,
+    String? currentFolder,
+    bool clearCurrentFolder = false,
+    String? searchQuery,
   }) {
     final newFiles = files ?? this.files;
     return VaultState(
       files: newFiles,
+      folders: folders ?? this.folders,
       isLoading: isLoading ?? this.isLoading,
       error: error ?? this.error,
       vaultPath: vaultPath ?? this.vaultPath,
+      currentFolder: clearCurrentFolder ? null : (currentFolder ?? this.currentFolder),
+      searchQuery: searchQuery ?? this.searchQuery,
       pinnedFiles: newFiles.where((f) => f.isPinned).toList(),
       recentFiles: newFiles
           .where((f) => !f.isPinned)
@@ -49,6 +62,40 @@ class VaultState {
 
   List<VaultFileModel> get pinnedFiles => _pinnedFiles;
   List<VaultFileModel> get recentFiles => _recentFiles;
+
+  /// Get files filtered by current folder and search query
+  List<VaultFileModel> get filteredFiles {
+    var result = files.toList();
+
+    // Filter by folder
+    if (currentFolder != null) {
+      result = result.where((f) => f.folder == currentFolder).toList();
+    }
+
+    // Filter by search query
+    if (searchQuery.isNotEmpty) {
+      final query = searchQuery.toLowerCase();
+      result = result.where((f) =>
+        f.displayTitle.toLowerCase().contains(query) ||
+        f.name.toLowerCase().contains(query)
+      ).toList();
+    }
+
+    // Sort by last opened
+    result.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
+    return result;
+  }
+
+  /// Get folders with file counts
+  List<VaultFolderModel> get foldersWithCounts {
+    return folders.map((folder) {
+      final count = files.where((f) => f.folder == folder.name).length;
+      return folder.copyWith(fileCount: count);
+    }).toList();
+  }
+
+  /// Get uncategorized files count
+  int get uncategorizedCount => files.where((f) => f.folder == null).length;
 }
 
 class VaultNotifier extends StateNotifier<VaultState> {
@@ -78,25 +125,32 @@ class VaultNotifier extends StateNotifier<VaultState> {
   Future<void> _loadVault() async {
     try {
       state = state.copyWith(isLoading: true);
-      
+
       final appDir = await getApplicationDocumentsDirectory();
       final vaultFile = File('${appDir.path}/CodeMD/vault.json');
-      
+
       List<VaultFileModel> files = [];
-      
+      List<VaultFolderModel> folders = [];
+
       if (await vaultFile.exists()) {
         final content = await vaultFile.readAsString();
         final data = jsonDecode(content) as Map<String, dynamic>;
-        
+
         if (data['files'] != null) {
           files = (data['files'] as List)
               .map((f) => VaultFileModel.fromJson(f as Map<String, dynamic>))
               .where((f) => File(f.path).existsSync()) // Only keep existing files
               .toList();
         }
+
+        if (data['folders'] != null) {
+          folders = (data['folders'] as List)
+              .map((f) => VaultFolderModel.fromJson(f as Map<String, dynamic>))
+              .toList();
+        }
       }
 
-      state = state.copyWith(files: files, isLoading: false);
+      state = state.copyWith(files: files, folders: folders, isLoading: false);
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
@@ -109,12 +163,13 @@ class VaultNotifier extends StateNotifier<VaultState> {
     try {
       final appDir = await getApplicationDocumentsDirectory();
       final vaultFile = File('${appDir.path}/CodeMD/vault.json');
-      
+
       final data = {
         'files': state.files.map((f) => f.toJson()).toList(),
+        'folders': state.folders.map((f) => f.toJson()).toList(),
         'lastUpdated': DateTime.now().toIso8601String(),
       };
-      
+
       await vaultFile.writeAsString(jsonEncode(data));
     } catch (e) {
       state = state.copyWith(error: 'Failed to save vault: $e');
@@ -216,6 +271,79 @@ class VaultNotifier extends StateNotifier<VaultState> {
 
   void clearError() {
     state = state.copyWith(error: null);
+  }
+
+  // Folder management
+  Future<void> createFolder(String name, {String? icon}) async {
+    if (state.folders.any((f) => f.name == name)) return;
+
+    final newFolder = VaultFolderModel(name: name, icon: icon);
+    final updatedFolders = [...state.folders, newFolder];
+    state = state.copyWith(folders: updatedFolders);
+    await _saveVault();
+  }
+
+  Future<void> deleteFolder(String name) async {
+    // Move files in this folder to uncategorized
+    final updatedFiles = state.files.map((f) {
+      if (f.folder == name) {
+        return f.copyWith(clearFolder: true);
+      }
+      return f;
+    }).toList();
+
+    final updatedFolders = state.folders.where((f) => f.name != name).toList();
+    state = state.copyWith(files: updatedFiles, folders: updatedFolders);
+    await _saveVault();
+  }
+
+  Future<void> renameFolder(String oldName, String newName) async {
+    if (state.folders.any((f) => f.name == newName)) return;
+
+    // Update folder name
+    final updatedFolders = state.folders.map((f) {
+      if (f.name == oldName) {
+        return f.copyWith(name: newName);
+      }
+      return f;
+    }).toList();
+
+    // Update files in this folder
+    final updatedFiles = state.files.map((f) {
+      if (f.folder == oldName) {
+        return f.copyWith(folder: newName);
+      }
+      return f;
+    }).toList();
+
+    state = state.copyWith(files: updatedFiles, folders: updatedFolders);
+    await _saveVault();
+  }
+
+  Future<void> moveFileToFolder(String filePath, String? folderName) async {
+    final updatedFiles = state.files.map((f) {
+      if (f.path == filePath) {
+        return f.copyWith(folder: folderName, clearFolder: folderName == null);
+      }
+      return f;
+    }).toList();
+
+    state = state.copyWith(files: updatedFiles);
+    await _saveVault();
+  }
+
+  // Navigation
+  void setCurrentFolder(String? folderName) {
+    state = state.copyWith(currentFolder: folderName, clearCurrentFolder: folderName == null);
+  }
+
+  // Search
+  void setSearchQuery(String query) {
+    state = state.copyWith(searchQuery: query);
+  }
+
+  void clearSearch() {
+    state = state.copyWith(searchQuery: '');
   }
 }
 

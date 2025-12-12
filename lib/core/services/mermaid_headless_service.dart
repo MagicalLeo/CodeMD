@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:collection';
 import 'package:flutter/services.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+import '../../presentation/providers/settings_provider.dart';
 
 class MermaidRenderResult {
   final String? svgBase64;
@@ -65,27 +66,50 @@ class MermaidHeadlessService {
       ),
       onWebViewCreated: (controller) {
         _controller = controller;
+        DebugLogger.info('MermaidHeadless', 'WebView created');
         controller.addJavaScriptHandler(
           handlerName: 'MermaidChannel',
           callback: (args) {
-            if (args.isEmpty) return;
+            DebugLogger.verbose('MermaidHeadless', 'JS callback received: ${args.length} args');
+            if (args.isEmpty) {
+              DebugLogger.warning('MermaidHeadless', 'Empty args received');
+              return;
+            }
             try {
               final Map<String, dynamic> data = Map<String, dynamic>.from(args.first);
+              final type = data['type'] as String?;
               final requestId = data['requestId'] as String?;
-              if (data['type'] == 'ready') {
+              DebugLogger.info('MermaidHeadless', 'Message type=$type, requestId=$requestId');
+
+              if (type == 'ready') {
                 _isReady = true;
                 _readyCompleter?.complete();
+                DebugLogger.info('MermaidHeadless', 'Mermaid ready');
                 return;
               }
-              if (requestId == null) return;
+              if (requestId == null) {
+                DebugLogger.warning('MermaidHeadless', 'No requestId in message');
+                return;
+              }
               final completer = _pending.remove(requestId);
-              if (completer == null) return;
+              if (completer == null) {
+                DebugLogger.warning('MermaidHeadless', 'No pending completer for $requestId');
+                return;
+              }
+
+              final hasSvg = data['svg'] != null;
+              final hasPng = data['png'] != null;
+              final error = data['error'] as String?;
+              DebugLogger.info('MermaidHeadless', 'Completing: hasSvg=$hasSvg, hasPng=$hasPng, error=$error');
+
               completer.complete(MermaidRenderResult(
                 svgBase64: data['svg'] as String?,
                 pngBase64: data['png'] as String?,
-                error: data['error'] as String?,
+                error: error,
               ));
-            } catch (_) {}
+            } catch (e) {
+              DebugLogger.error('MermaidHeadless', 'Exception in JS callback', e);
+            }
           },
         );
       },
@@ -147,24 +171,55 @@ class MermaidHeadlessService {
         await waitMermaid();
         window.mermaid.initialize({
           startOnLoad: false,
-          securityLevel: 'loose',
+          securityLevel: 'strict',
           theme: theme || 'default',
+          htmlLabels: false,
           flowchart: { htmlLabels: false, useMaxWidth: false },
-          sequence: { useMaxWidth: false, mirrorActors: false, useHtmlLabels: false },
+          sequence: { useMaxWidth: false, mirrorActors: false, useHtmlLabels: false, htmlLabels: false },
           class: { useMaxWidth: false, htmlLabels: false },
+          classDiagram: { useMaxWidth: false, htmlLabels: false },
           er: { useMaxWidth: false, htmlLabels: false },
-          journey: { useHtmlLabels: false },
-          pie: { useHtmlLabels: false },
+          journey: { useHtmlLabels: false, htmlLabels: false },
+          pie: { useHtmlLabels: false, htmlLabels: false },
+          gantt: { useMaxWidth: false, htmlLabels: false },
+          state: { useMaxWidth: false, htmlLabels: false },
+          block: { useMaxWidth: false, htmlLabels: false },
+          architecture: { useMaxWidth: false, htmlLabels: false },
+          c4: { useMaxWidth: false, htmlLabels: false },
         });
 
         const { svg: svgCode } = await window.mermaid.render('id' + Date.now(), code);
         const svgBase64 = btoa(unescape(encodeURIComponent(svgCode)));
+
+        // Check if SVG is too large for PNG conversion (gantt charts can be huge)
+        const parser = new DOMParser();
+        const svgDoc = parser.parseFromString(svgCode, 'image/svg+xml');
+        const svgEl = svgDoc.documentElement;
+        let svgWidth = parseFloat(svgEl.getAttribute('width')) || 800;
+        let svgHeight = parseFloat(svgEl.getAttribute('height')) || 600;
+        const viewBox = svgEl.getAttribute('viewBox');
+        if (viewBox) {
+          const parts = viewBox.split(' ').map(Number);
+          if (parts.length === 4) {
+            svgWidth = parts[2] || svgWidth;
+            svgHeight = parts[3] || svgHeight;
+          }
+        }
+
+        // Skip PNG for very large diagrams (>4000px in any dimension)
+        const maxSafeSize = 4000;
+        if (svgWidth > maxSafeSize || svgHeight > maxSafeSize) {
+          console.log('SVG too large for PNG (' + svgWidth + 'x' + svgHeight + '), returning SVG only');
+          sendToFlutter({ type: 'renderSuccess', requestId, svg: svgBase64 });
+          return;
+        }
 
         try {
           const isDark = theme === 'dark';
           const pngBase64 = await svgToPng(svgCode, isDark);
           sendToFlutter({ type: 'renderSuccess', requestId, svg: svgBase64, png: pngBase64 });
         } catch (e) {
+          console.log('PNG conversion failed:', e);
           sendToFlutter({ type: 'renderSuccess', requestId, svg: svgBase64 });
         }
       } catch (e) {
@@ -197,7 +252,7 @@ class MermaidHeadlessService {
         img.onload = () => {
           try {
             const canvas = document.createElement('canvas');
-            // Limit max canvas size to avoid memory issues on mobile
+            // Higher resolution for better quality when zoomed
             const maxDim = 4096;
             let ratio = 2.5;
             let w = (img.width || width) * ratio;
@@ -262,15 +317,18 @@ class MermaidHeadlessService {
   }
 
   Future<MermaidRenderResult> _renderOnce(String mermaidCode, bool isDark, bool requestPng) async {
+    DebugLogger.info('MermaidHeadless', '_renderOnce called, code length=${mermaidCode.length}');
     await ensureInitialized();
     final controller = _controller;
     if (controller == null) {
+      DebugLogger.error('MermaidHeadless', 'Controller is null after init');
       return const MermaidRenderResult(error: 'Renderer not ready');
     }
 
     final requestId = DateTime.now().microsecondsSinceEpoch.toString();
     final completer = Completer<MermaidRenderResult>();
     _pending[requestId] = completer;
+    DebugLogger.info('MermaidHeadless', 'Created request $requestId');
 
     final payload = jsonEncode({
       'code': mermaidCode,
@@ -279,11 +337,13 @@ class MermaidHeadlessService {
       'png': requestPng,
     });
     final script = "renderMermaid($payload);";
+    DebugLogger.verbose('MermaidHeadless', 'Executing JS, payload length=${payload.length}');
     controller.evaluateJavascript(source: script);
 
-    // timeout safety
-    Future.delayed(const Duration(seconds: 8)).then((_) {
+    // timeout safety - increase to 15s for large diagrams
+    Future.delayed(const Duration(seconds: 15)).then((_) {
       if (!completer.isCompleted) {
+        DebugLogger.error('MermaidHeadless', 'Request $requestId timed out');
         _pending.remove(requestId);
         completer.complete(const MermaidRenderResult(error: 'timeout'));
       }

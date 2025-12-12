@@ -9,6 +9,7 @@ class VaultFileModel extends Equatable {
   final DateTime lastOpened;
   final int size;
   final bool isPinned;
+  final String? folder; // null means root/uncategorized
 
   const VaultFileModel({
     required this.path,
@@ -18,6 +19,7 @@ class VaultFileModel extends Equatable {
     required this.lastOpened,
     required this.size,
     this.isPinned = false,
+    this.folder,
   });
 
   VaultFileModel copyWith({
@@ -28,6 +30,8 @@ class VaultFileModel extends Equatable {
     DateTime? lastOpened,
     int? size,
     bool? isPinned,
+    String? folder,
+    bool clearFolder = false,
   }) {
     return VaultFileModel(
       path: path ?? this.path,
@@ -37,6 +41,7 @@ class VaultFileModel extends Equatable {
       lastOpened: lastOpened ?? this.lastOpened,
       size: size ?? this.size,
       isPinned: isPinned ?? this.isPinned,
+      folder: clearFolder ? null : (folder ?? this.folder),
     );
   }
 
@@ -49,6 +54,7 @@ class VaultFileModel extends Equatable {
       lastOpened: DateTime.parse(json['lastOpened'] as String),
       size: json['size'] as int,
       isPinned: json['isPinned'] as bool? ?? false,
+      folder: json['folder'] as String?,
     );
   }
 
@@ -61,6 +67,7 @@ class VaultFileModel extends Equatable {
       'lastOpened': lastOpened.toIso8601String(),
       'size': size,
       'isPinned': isPinned,
+      'folder': folder,
     };
   }
 
@@ -95,5 +102,44 @@ class VaultFileModel extends Equatable {
         lastOpened,
         size,
         isPinned,
+        folder,
       ];
+}
+
+/// Folder model for organizing files
+class VaultFolderModel extends Equatable {
+  final String name;
+  final String? icon; // emoji or icon name
+  final int fileCount;
+
+  const VaultFolderModel({
+    required this.name,
+    this.icon,
+    this.fileCount = 0,
+  });
+
+  factory VaultFolderModel.fromJson(Map<String, dynamic> json) {
+    return VaultFolderModel(
+      name: json['name'] as String,
+      icon: json['icon'] as String?,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'icon': icon,
+    };
+  }
+
+  VaultFolderModel copyWith({String? name, String? icon, int? fileCount}) {
+    return VaultFolderModel(
+      name: name ?? this.name,
+      icon: icon ?? this.icon,
+      fileCount: fileCount ?? this.fileCount,
+    );
+  }
+
+  @override
+  List<Object?> get props => [name, icon, fileCount];
 }

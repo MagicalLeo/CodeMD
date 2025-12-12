@@ -208,13 +208,13 @@ class _BlockListState extends ConsumerState<BlockList> {
         final viewportHeight = constraints.maxHeight;
         if (viewportHeight <= 0) return const SizedBox.shrink();
 
-        // Thumb size proportional to visible content
-        final thumbHeight = (viewportHeight * 0.15).clamp(50.0, 120.0);
+        // Smaller thumb for less intrusive scrollbar
+        final thumbHeight = (viewportHeight * 0.12).clamp(40.0, 80.0);
         final trackHeight = viewportHeight - thumbHeight;
         final thumbTop = (_scrollProgress * trackHeight).clamp(0.0, trackHeight);
 
         return GestureDetector(
-          behavior: HitTestBehavior.opaque,
+          behavior: HitTestBehavior.translucent, // Allow taps to pass through
           onVerticalDragStart: (details) {
             _isDraggingScrollbar = true;
           },
@@ -226,42 +226,38 @@ class _BlockListState extends ConsumerState<BlockList> {
             _isDraggingScrollbar = false;
             _saveCurrentPosition();
           },
-          onTapDown: (details) {
-            final newProgress = (details.localPosition.dy / viewportHeight).clamp(0.0, 1.0);
-            _onScrollbarDrag(newProgress);
-          },
           child: Container(
-            width: 32, // Wider touch target
+            width: 12, // Much narrower - only the visible scrollbar area
             color: Colors.transparent,
             child: Stack(
               children: [
-                // Track background
+                // Track background - very subtle
                 Positioned(
-                  right: 4,
-                  top: 8,
-                  bottom: 8,
+                  right: 2,
+                  top: 16,
+                  bottom: 16,
                   child: Container(
-                    width: 8,
+                    width: 4,
                     decoration: BoxDecoration(
                       color: isDarkMode
-                          ? Colors.white.withOpacity(0.08)
-                          : Colors.black.withOpacity(0.06),
-                      borderRadius: BorderRadius.circular(4),
+                          ? Colors.white.withOpacity(0.05)
+                          : Colors.black.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(2),
                     ),
                   ),
                 ),
-                // Thumb
+                // Thumb - smaller and more subtle
                 Positioned(
-                  right: 2,
-                  top: thumbTop + 8,
+                  right: 1,
+                  top: thumbTop + 16,
                   child: Container(
-                    width: 12,
-                    height: thumbHeight - 16,
+                    width: 6,
+                    height: thumbHeight - 32,
                     decoration: BoxDecoration(
                       color: _isDraggingScrollbar
-                          ? (isDarkMode ? Colors.white.withOpacity(0.7) : Colors.black.withOpacity(0.5))
-                          : (isDarkMode ? Colors.white.withOpacity(0.4) : Colors.black.withOpacity(0.3)),
-                      borderRadius: BorderRadius.circular(6),
+                          ? (isDarkMode ? Colors.white.withOpacity(0.6) : Colors.black.withOpacity(0.4))
+                          : (isDarkMode ? Colors.white.withOpacity(0.25) : Colors.black.withOpacity(0.2)),
+                      borderRadius: BorderRadius.circular(3),
                     ),
                   ),
                 ),

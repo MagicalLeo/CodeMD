@@ -1,4 +1,5 @@
 import 'dart:convert';
+import '../../presentation/providers/settings_provider.dart';
 import '../services/mermaid_headless_service.dart';
 
 class MermaidRenderOutput {
@@ -21,28 +22,43 @@ class MermaidRepositoryImpl implements MermaidRepository {
 
   @override
   Future<MermaidRenderOutput> render(String code, {required bool isDark}) async {
-    final processed = _prepareCode(code, isDark);
-    final cacheKey = _cacheKey(processed, isDark);
-    final cached = _svgMemCache[cacheKey];
-    if (cached != null) {
-      return MermaidRenderOutput(svg: cached);
-    }
+    try {
+      DebugLogger.info('MermaidRepo', 'render() called, code length=${code.length}');
+      final processed = _prepareCode(code, isDark);
+      final cacheKey = _cacheKey(processed, isDark);
+      final cached = _svgMemCache[cacheKey];
+      if (cached != null) {
+        DebugLogger.info('MermaidRepo', 'Cache hit');
+        return MermaidRenderOutput(svg: cached);
+      }
 
-    // Request PNG first to avoid SVG black-block issues on some renderers.
-    final result = await _headless.render(processed, isDark: isDark, requestPng: true);
-    if (result.error != null) {
-      return MermaidRenderOutput(error: result.error);
+      DebugLogger.info('MermaidRepo', 'Calling headless.render()');
+      // Request PNG first to avoid SVG black-block issues on some renderers.
+      final result = await _headless.render(processed, isDark: isDark, requestPng: true);
+      DebugLogger.info('MermaidRepo', 'headless.render() returned: error=${result.error}, hasPng=${result.pngBase64 != null}, hasSvg=${result.svgBase64 != null}');
+
+      if (result.error != null) {
+        DebugLogger.error('MermaidRepo', 'Render error: ${result.error}');
+        return MermaidRenderOutput(error: result.error);
+      }
+      if (result.pngBase64 != null) {
+        final pngBytes = base64Decode(result.pngBase64!);
+        DebugLogger.info('MermaidRepo', 'PNG decoded, size=${pngBytes.length} bytes');
+        return MermaidRenderOutput(pngBytes: pngBytes);
+      }
+      if (result.svgBase64 != null) {
+        final decoded = utf8.decode(base64Decode(result.svgBase64!));
+        final sanitized = _sanitizeSvg(decoded);
+        _svgMemCache[cacheKey] = sanitized;
+        DebugLogger.info('MermaidRepo', 'SVG decoded, length=${sanitized.length}');
+        return MermaidRenderOutput(svg: sanitized);
+      }
+      DebugLogger.warning('MermaidRepo', 'No result returned');
+      return const MermaidRenderOutput(error: 'Unknown render result');
+    } catch (e, st) {
+      DebugLogger.error('MermaidRepo', 'Exception in render()', '$e\n$st');
+      return MermaidRenderOutput(error: 'Exception: $e');
     }
-    if (result.pngBase64 != null) {
-      return MermaidRenderOutput(pngBytes: base64Decode(result.pngBase64!));
-    }
-    if (result.svgBase64 != null) {
-      final decoded = utf8.decode(base64Decode(result.svgBase64!));
-      final sanitized = _sanitizeSvg(decoded);
-      _svgMemCache[cacheKey] = sanitized;
-      return MermaidRenderOutput(svg: sanitized);
-    }
-    return const MermaidRenderOutput(error: 'Unknown render result');
   }
 
   String _cacheKey(String processedCode, bool isDark) =>

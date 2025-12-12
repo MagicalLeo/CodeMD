@@ -6,6 +6,7 @@ import 'presentation/screens/editor/editor_screen.dart';
 import 'core/theme/app_theme.dart';
 import 'presentation/providers/document_provider.dart';
 import 'presentation/providers/vault_provider.dart';
+import 'presentation/providers/settings_provider.dart';
 
 const _intentChannel = MethodChannel('codemd/intent');
 
@@ -60,15 +61,28 @@ class _CodeMDAppState extends ConsumerState<CodeMDApp> {
     }
   }
 
+  ThemeMode _getThemeMode(AppThemeMode mode) {
+    switch (mode) {
+      case AppThemeMode.system:
+        return ThemeMode.system;
+      case AppThemeMode.light:
+        return ThemeMode.light;
+      case AppThemeMode.dark:
+        return ThemeMode.dark;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final settings = ref.watch(settingsProvider);
+
     return MaterialApp(
       title: 'CodeMD',
       navigatorKey: _navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      themeMode: ThemeMode.system,
+      themeMode: _getThemeMode(settings.themeMode),
       home: const HomeScreen(),
     );
   }
