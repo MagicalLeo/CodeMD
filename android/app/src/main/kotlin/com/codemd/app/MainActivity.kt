@@ -1,4 +1,4 @@
-package com.example.codemd
+package com.codemd.app
 
 import android.content.Intent
 import android.net.Uri

@@ -169,10 +169,12 @@ class MermaidHeadlessService {
       const { code, theme, requestId } = payload;
       try {
         await waitMermaid();
+        const isDark = theme === 'dark';
+        // Use appropriate theme based on app theme
         window.mermaid.initialize({
           startOnLoad: false,
           securityLevel: 'strict',
-          theme: theme || 'default',
+          theme: isDark ? 'dark' : 'default',
           htmlLabels: false,
           flowchart: { htmlLabels: false, useMaxWidth: false },
           sequence: { useMaxWidth: false, mirrorActors: false, useHtmlLabels: false, htmlLabels: false },
@@ -215,7 +217,6 @@ class MermaidHeadlessService {
         }
 
         try {
-          const isDark = theme === 'dark';
           const pngBase64 = await svgToPng(svgCode, isDark);
           sendToFlutter({ type: 'renderSuccess', requestId, svg: svgBase64, png: pngBase64 });
         } catch (e) {
